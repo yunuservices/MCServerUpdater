@@ -1,6 +1,7 @@
 # MCServerUpdater
 
 > This is a simple program that will check for updates to Minecraft server jar and download them if they are available.
+> Also, it will boot up the server.jar when the update is successful.
 
 ## Download
 
