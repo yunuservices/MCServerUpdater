@@ -6,9 +6,18 @@ import joptsimple.OptionSet;
 import joptsimple.OptionSpec;
 
 import java.io.BufferedReader;
+import java.io.File;
 import java.io.PrintWriter;
 import java.io.StringReader;
 import java.io.StringWriter;
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.jar.JarFile;
 import java.util.logging.*;
 
 public final class MCServerUpdater {
@@ -97,7 +106,8 @@ public final class MCServerUpdater {
             UpdateStatus status = builder.execute();
             if (status.isSuccessStatus()) {
                 LOGGER.info(status.getMessage());
-                System.exit(0);
+                String[] minecraftArgs = filterMinecraftArgs(args);
+                boot(outputName, minecraftArgs);
             } else {
                 LOGGER.log(Level.SEVERE, "Failed to update", status.getThrowable());
                 System.exit(1);
@@ -105,6 +115,47 @@ public final class MCServerUpdater {
         } catch (Exception e) {
             LOGGER.log(Level.SEVERE, "An error occurred", e);
             System.exit(1);
+        }
+    }
+
+    private static String[] filterMinecraftArgs(String[] args) {
+        List<String> minecraftArgs = new ArrayList<>();
+        for (int i = 0; i < args.length; i++) {
+            if (args[i].equals("--project") || args[i].equals("--version") || args[i].equals("--output") || args[i].equals("--checksum") || args[i].equals("--working-directory")) {
+                i++; 
+                continue;
+            }
+            minecraftArgs.add(args[i]);
+        }
+        return minecraftArgs.toArray(new String[0]);
+    }
+
+    private static void boot(String jarPath, String[] args) {
+        File serverJar = new File(jarPath);
+        try (JarFile jarFile = new JarFile(serverJar)) {
+            String mainClassName = jarFile.getManifest().getMainAttributes().getValue("Main-Class");
+            if (mainClassName == null) {
+                throw new RuntimeException("There is no Main-Class in the jar manifest.");
+            }
+            URL jarURL = serverJar.toURI().toURL();
+            URLClassLoader classLoader = new URLClassLoader(new URL[]{jarURL}, MCServerUpdater.class.getClassLoader().getParent());
+
+            Thread thread = new Thread(() -> {
+                try {
+                    Class<?> mainClass = Class.forName(mainClassName, true, classLoader);
+                    MethodHandle mainMethod = MethodHandles.lookup()
+                            .findStatic(mainClass, "main", MethodType.methodType(void.class, String[].class));
+                    mainMethod.invoke((Object) args);
+                } catch (Throwable e) {
+                    throw new RuntimeException("Error encountered while booting the server.", e);
+                }
+            }, "ServerBootThread");
+
+            thread.setContextClassLoader(classLoader);
+            thread.start();
+            thread.join();
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to boot up " + jarPath, e);
         }
     }
 }
