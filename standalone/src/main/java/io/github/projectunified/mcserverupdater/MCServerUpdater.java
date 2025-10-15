@@ -10,14 +10,8 @@ import java.io.File;
 import java.io.PrintWriter;
 import java.io.StringReader;
 import java.io.StringWriter;
-import java.lang.invoke.MethodHandle;
-import java.lang.invoke.MethodHandles;
-import java.lang.invoke.MethodType;
-import java.net.URL;
-import java.net.URLClassLoader;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.jar.JarFile;
 import java.util.logging.*;
 
 public final class MCServerUpdater {
@@ -55,6 +49,7 @@ public final class MCServerUpdater {
         OptionSpec<String> checksumFile = parser.accepts("checksum", "The checksum file path").withOptionalArg().ofType(String.class).defaultsTo("checksum.txt");
         OptionSpec<String> workingDirectory = parser.accepts("working-directory", "The working directory").withOptionalArg().ofType(String.class).defaultsTo(".");
         OptionSet options = parser.parse(args);
+
         if (options.has(help)) {
             StringWriter writer = new StringWriter();
             parser.printHelpOn(writer);
@@ -122,7 +117,7 @@ public final class MCServerUpdater {
         List<String> minecraftArgs = new ArrayList<>();
         for (int i = 0; i < args.length; i++) {
             if (args[i].equals("--project") || args[i].equals("--version") || args[i].equals("--output") || args[i].equals("--checksum") || args[i].equals("--working-directory")) {
-                i++; 
+                i++;
                 continue;
             }
             minecraftArgs.add(args[i]);
@@ -132,30 +127,33 @@ public final class MCServerUpdater {
 
     private static void boot(String jarPath, String[] args) {
         File serverJar = new File(jarPath);
-        try (JarFile jarFile = new JarFile(serverJar)) {
-            String mainClassName = jarFile.getManifest().getMainAttributes().getValue("Main-Class");
-            if (mainClassName == null) {
-                throw new RuntimeException("There is no Main-Class in the jar manifest.");
-            }
-            URL jarURL = serverJar.toURI().toURL();
-            URLClassLoader classLoader = new URLClassLoader(new URL[]{jarURL}, MCServerUpdater.class.getClassLoader().getParent());
+        if (!serverJar.exists()) {
+            throw new RuntimeException("Server JAR file not found: " + jarPath);
+        }
 
-            Thread thread = new Thread(() -> {
-                try {
-                    Class<?> mainClass = Class.forName(mainClassName, true, classLoader);
-                    MethodHandle mainMethod = MethodHandles.lookup()
-                            .findStatic(mainClass, "main", MethodType.methodType(void.class, String[].class));
-                    mainMethod.invoke((Object) args);
-                } catch (Throwable e) {
-                    throw new RuntimeException("Error encountered while booting the server.", e);
-                }
-            }, "ServerBootThread");
+        LOGGER.info("Booting server: " + serverJar.getAbsolutePath());
 
-            thread.setContextClassLoader(classLoader);
-            thread.start();
-            thread.join();
+        try {
+            List<String> command = new ArrayList<>();
+            command.add("java");
+            command.add("-jar");
+            command.add(serverJar.getName());
+            command.addAll(List.of(args));
+
+            ProcessBuilder processBuilder = new ProcessBuilder(command);
+            processBuilder.directory(serverJar.getAbsoluteFile().getParentFile());
+            processBuilder.inheritIO();
+
+            LOGGER.info("Starting process...");
+            Process process = processBuilder.start();
+            int exitCode = process.waitFor();
+            LOGGER.info("Server process finished with exit code " + exitCode);
+
         } catch (Exception e) {
-            throw new RuntimeException("Failed to boot up " + jarPath, e);
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            throw new RuntimeException("Failed to boot " + jarPath, e);
         }
     }
 }
